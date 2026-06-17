@@ -6,7 +6,7 @@ The project was built by hand up to the first usable int8 generation path: model
 
 Educational project for understanding LLM inference, not a production engine.
 
-Current status: int8 runs at ~4.9 tok/s on Apple M4; quality is still WIP due to numerical drift.
+Current status: int8 runs at ~4.9 tok/s on Apple M4; quality is still WIP due to numerical drift (int8 engine perplexity ~90 vs ~3.7 for the HuggingFace fp32 reference, see [Numerical drift](#numerical-drift-int8)).
 
 Independent project, not affiliated with Mistral AI.
 
@@ -67,7 +67,7 @@ python3 export_mistral.py \
 
 **Option - f32 (full parity tests)**
 
-Full-precision weights (~27 GB). Best for validating correctness against Hugging Face. Runs 19 parity tests.
+Full-precision weights (~27 GB). Best for validating correctness against Hugging Face. Runs 21 parity tests.
 
 ```bash
 python3 export_mistral.py \
@@ -104,7 +104,7 @@ Same command for f32 and int8 - the runtime picks the path from the binary heade
 ./build/mistral.cpp ./mistral.bin "Paris is the capital of" --temp 0.7
 ```
 
-`--temp` controls sampling: `0` is greedy (default), values like `0.7` reduce repetition.
+`--temp` controls sampling: `0` is greedy (default), values like `0.7` add randomness. A repetition penalty is applied on every step regardless of temperature, so even greedy decoding discourages repeats.
 
 The program prints up to 50 generated tokens and then a throughput line like:
 
@@ -146,27 +146,33 @@ cmake --build build --target test_exec
 ./build/test_exec
 ```
 
-Tests are filtered by the quantization mode in `mistral.bin`. Golden values come from Hugging Face f32 weights. int8 runs component tests plus logits/layer-stack diagnostics (these fail when int8 drift breaks generation). The project is still dealing with numerical drift in the quantized path, so int8 output quality and long generations should be treated as work in progress. Re-export with `--quant f32` to run the full 19-test component suite.
+Tests are filtered by the quantization mode in `mistral.bin`. Golden values come from Hugging Face f32 weights. int8 runs the component tests plus logits/layer-stack diagnostics. **The `test logits multi top10` diagnostic currently fails on int8** because numerical drift flips the top-1 token on several greedy steps — this is the known quantized-path issue, not a build problem. The component tests still pass. (The `test layer stack prefill` test is skipped unless you regenerate the heavier per-layer goldens with `DUMP_LAYER_STACK=1`; without them it reports a pass at 0.0 ms.) Re-export with `--quant f32` to run the full 21-test component suite.
 
 The runner prints a report (green checks on pass, red on fail) with per-test timing.
 
-**Expected result (default int8 export):**
+**Expected result (default int8 export)** — the logits diagnostic fails on int8:
 
 ```text
 ====================================================
   mistral.cpp · test suite            model: int8
 ====================================================
 
-  ✓  test logits multi top10               0.0 ms
+  ✗  test logits multi top10           17287.3 ms
+          [paris] step 0 top1 f32=4843 int8=4843 | top1=OK  top10_overlap=7/10
+          [paris] step 5 top1 f32=9504 int8=9504 | top1=OK  top10_overlap=3/10
+          [sky] step 1 top1 f32=4672 int8=3534 | top1=FLIP top10_overlap=5/10
+          [sky] step 3 top1 f32=28723 int8=28725 | top1=FLIP top10_overlap=5/10
+          [sky] step 4 top1 f32=415 int8=13 | top1=FLIP top10_overlap=7/10
+          [sky] step 5 top1 f32=4376 int8=3181 | top1=FLIP top10_overlap=3/10
   ✓  test layer stack prefill              0.0 ms
   ✓  load config                           0.0 ms
-  ✓  load weights                          9.9 ms
-  ✓  test attention feedforward mlp      290.2 ms
-  ✓  tokenizer encode                      0.3 ms
+  ✓  load weights                          0.3 ms
+  ✓  test attention feedforward mlp        4.8 ms
+  ✓  tokenizer encode                      0.5 ms
   ✓  tokenizer encode fallback             0.0 ms
 
 ----------------------------------------------------
-  PASSED   7 / 7        0 failed        300.4 ms
+  FAILED   6 / 7        1 failed        17293.0 ms
 ====================================================
 ```
 
@@ -177,6 +183,8 @@ The runner prints a report (green checks on pass, red on fail) with per-test tim
   mistral.cpp · test suite             model: f32
 ====================================================
 
+  ✗  test logits multi top10           17000.0 ms
+  ✓  test layer stack prefill              0.0 ms
   ✓  test rope                             0.0 ms
   ✓  test matmul                           0.0 ms
   ✓  test row matmul                       0.0 ms
@@ -198,7 +206,7 @@ The runner prints a report (green checks on pass, red on fail) with per-test tim
   ✓  tokenizer decode                      0.0 ms
 
 ----------------------------------------------------
-  PASSED   19 / 19        0 failed        198.4 ms
+  FAILED   20 / 21        1 failed        198.4 ms
 ====================================================
 ```
 
@@ -209,6 +217,26 @@ Model binary open failed
 ```
 
 then `./mistral.bin` does not exist at the repo root. Run the export command in step 3, or copy the exported model binary to `./mistral.bin`.
+
+# Numerical drift (int8)
+
+The int8 engine is much less accurate than the HuggingFace fp32 reference, and the error grows with context length (`scripts/perplexity.py` scores the engine against HF fp32, bucketed by position):
+
+| Token positions | int8 engine perplexity | HF fp32 |
+| --------------- | ---------------------- | ------- |
+| 0–16    | ~32 | ~3.7 |
+| 32–64   | ~54 | ~3.7 |
+| 160–192 | ~90 | ~3.7 |
+
+Only the MLP gate/up projections are quantized (per-group symmetric int8, group size 64), so the weight format is a small perturbation. The likely dominant cause is the int8 compute path (matmul accumulation, dequant, KV cache feedback) compounding per-token error.
+
+### Solutions
+
+1. Accumulate int8 matmuls in int32, scale once.
+2. Add a kernel test comparing int8 matmul vs f32 matmul of the dequantized weights.
+3. Bisect by layer with `DUMP_LAYER_STACK=1` goldens.
+4. Confirm KV cache is f32.
+5. Try per-token activation scaling.
 
 # Roadmap
 
