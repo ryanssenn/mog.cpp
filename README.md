@@ -2,6 +2,8 @@
 
 A from-scratch C++ implementation of Mistral 7B inference on CPU. The core was hand-written through the first successful forward pass; agents were then used to accelerate the rest. Validated against Hugging Face reference outputs, with f32 and int8 paths.
 
+<img width="1200" height="331" alt="mistral_demo" src="https://github.com/user-attachments/assets/2660a8e4-c444-44da-8e19-bd70ea76449a" />
+
 Measured on an AWS Linux instance (16 vCPU Intel Xeon Platinum 8488C, 32 GiB RAM), the int8 implementation achieves ~2.6 tok/s throughput with a perplexity of ~5.2, matching the Hugging Face reference.
 
 An educational project: compact code you can read through, not a production engine. Not affiliated with Mistral AI.
