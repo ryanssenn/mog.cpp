@@ -33,10 +33,11 @@ struct MetalBackend::Impl {
             return;
         }
 
+        // nil on machines without a GPU (e.g. virtualized CI runners);
+        // available() reports it and Metal stays unused.
         device = MTLCreateSystemDefaultDevice();
-
         if (!device) {
-            throw std::runtime_error("No metal device found");
+            return;
         }
 
         queue = [device newCommandQueue];
@@ -81,6 +82,10 @@ std::unordered_map<std::string, id<MTLComputePipelineState>> MetalBackend::Impl:
 
 void MetalBackend::init(){
     Impl::init();
+}
+
+bool MetalBackend::available(){
+    return Impl::device != nil;
 }
 
 std::shared_ptr<Storage> MetalBackend::allocate_buffer(size_t size){

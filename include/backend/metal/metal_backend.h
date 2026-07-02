@@ -11,6 +11,8 @@ struct MetalBackend {
     struct Impl;
 
     static void init();
+    // False when no Metal device exists (e.g. virtualized CI runners).
+    static bool available();
     // Fresh uninitialized buffer; the storage owns it.
     static std::shared_ptr<Storage> allocate_buffer(size_t size);
     // Wrap existing memory, zero copy. ptr must be page-aligned (e.g. mmap)

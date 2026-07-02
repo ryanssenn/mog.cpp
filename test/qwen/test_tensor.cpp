@@ -92,6 +92,8 @@ int test_tensor_views() {
 // A Metal arena is one MTLBuffer; tensors view it at offsets and its memory
 // is CPU-visible through cpu_ptr (unified memory).
 int test_tensor_metal_alloc() {
+    if (!MetalBackend::available()) return 0;
+
     Arena arena(1 << 20, Device::Metal);
     Tensor a = Tensor::alloc(arena, DType::F32, {8});
     Tensor b = Tensor::alloc(arena, DType::F32, {8});
@@ -108,6 +110,8 @@ int test_tensor_metal_alloc() {
 // from_ptr on Metal wraps page-aligned memory zero-copy: the MTLBuffer
 // aliases the source pages, so both sides see each other's writes.
 int test_tensor_metal_from_ptr() {
+    if (!MetalBackend::available()) return 0;
+
     size_t page = static_cast<size_t>(getpagesize());
     void* mem = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (!expect(mem != MAP_FAILED, "mmap failed")) return 1;
@@ -137,6 +141,8 @@ int test_tensor_metal_from_ptr() {
 // Loading the model on Metal wraps the mmap'd file in one MTLBuffer:
 // all weights share that storage and hold the same bytes as a CPU load.
 int test_model_load_metal() {
+    if (!MetalBackend::available()) return 0;
+
     ModelLoad metal_model;
     metal_model.load(model_path(), Device::Metal);
 
